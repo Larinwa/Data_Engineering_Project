@@ -1,0 +1,144 @@
+fundamentals:
+  name: hvfhv_trip_events
+  domain: ride-hailing / high-volume for-hire vehicle trips
+  description: >
+    Individual trip records for high-volume for-hire vehicle services
+    operating in New York City and published by the NYC Taxi &
+    Limousine Commission.
+  version: 1.0.0
+  status: active
+  source_dataset: fhvhv_tripdata_2024-01.parquet
+  sample_size: 2517
+  sample_method: >
+    Sample drawn from the January 2024 source data across all 31 days
+    using a fixed random seed for reproducibility.
+
+stakeholders:
+  producer:
+    name: NYC Taxi & Limousine Commission
+    description: >
+      Public publisher of monthly HVFHV trip records submitted by
+      licensed high-volume for-hire vehicle bases.
+
+  consumer:
+    name: Decision-Support / Demand Analysis
+    description: >
+      Uses trip data to analyse demand patterns by zone and time.
+
+  contract_owner:
+    name: Data Analyst
+    description: >
+      Responsible for maintaining the consumer-defined contract.
+
+schema:
+  fields:
+    - name: hvfhs_license_num
+      type: string
+      description: Identifies the HVFHV company that operated the trip
+      required: true
+
+    - name: dispatching_base_num
+      type: string
+      description: License number of the base that dispatched the trip
+      required: true
+
+    - name: request_datetime
+      type: timestamp
+      description: Time the rider requested the trip
+      required: true
+
+    - name: on_scene_datetime
+      type: timestamp
+      description: Time the driver arrived at the pickup location
+      required: false
+
+    - name: pickup_datetime
+      type: timestamp
+      description: Time the trip began
+      required: true
+
+    - name: dropoff_datetime
+      type: timestamp
+      description: Time the trip ended
+      required: true
+
+    - name: PULocationID
+      type: integer
+      description: Pickup zone identifier
+      required: true
+
+    - name: DOLocationID
+      type: integer
+      description: Dropoff zone identifier
+      required: true
+
+    - name: trip_miles
+      type: float
+      description: Trip distance in miles
+      required: true
+
+    - name: trip_time
+      type: integer
+      description: Trip duration in seconds
+      required: true
+
+    - name: base_passenger_fare
+      type: float
+      description: Base passenger fare
+      required: true
+
+    - name: driver_pay
+      type: float
+      description: Amount paid to the driver
+      required: true
+
+service_level_objectives:
+  - name: completeness_dropoff_zone
+    description: >
+      Dropoff location should correspond to a known NYC zone rather
+      than the sentinel codes 264 or 265.
+    metric: percentage of trips where DOLocationID is not in [264, 265]
+    threshold: ">= 95%"
+    real_baseline_observed: "96.38%"
+
+  - name: completeness_pickup_zone
+    description: >
+      Pickup location should correspond to a known NYC zone rather
+      than the sentinel codes 264 or 265.
+    metric: percentage of trips where PULocationID is not in [264, 265]
+    threshold: ">= 99%"
+    real_baseline_observed: "100.00%"
+
+  - name: responsiveness
+    description: >
+      Measures the proportion of trips picked up within 10 minutes
+      of the recorded request time.
+    metric: percentage of valid trips where pickup_datetime - request_datetime <= 10 minutes
+    threshold: ">= 95%"
+    real_baseline_observed: "95.95%"
+
+  - name: request_pickup_ordering
+    description: >
+      Pickup should not occur before the recorded request time.
+    metric: percentage of trips where pickup_datetime >= request_datetime
+    threshold: ">= 99%"
+    real_baseline_observed: "99.05%"
+
+  - name: data_availability
+    description: >
+      Monthly trip records should be publicly released within the
+      expected publication window.
+    metric: time between the end of the trip month and public file release
+    threshold: "published within approximately 2 months of month end"
+    testable_live: false
+
+change_management:
+  breaking_change_definition: >
+    Any rename, removal, or type change to a required field; any change
+    to the interpretation or use of PULocationID or DOLocationID sentinel
+    codes; or a change to the stated monthly publication cadence.
+
+notification_expectation: >
+  Changes are expected to be communicated through the publisher's
+  public documentation or notices because there is no negotiated
+  producer-consumer agreement.

@@ -1,0 +1,36 @@
+contract:
+  name: harmonization_contract
+  version: "1.0"
+  description: >
+    Consumer-defined contract for the harmonization of HVFHV and
+    Yellow Taxi trip records into a shared canonical schema.
+    The contract evaluates whether the harmonization preserves
+    records and produces semantically plausible relationships
+    between the canonical fields.
+
+checks:
+  - name: mapping_completeness
+    type: structural
+    description: >
+      Every source record should appear in the harmonized output.
+    metric: "harmonized rows / source rows, evaluated separately by source"
+    threshold: "== 100%"
+
+  - name: speed_plausibility
+    type: semantic
+    description: >
+      The relationship between trip distance and trip duration should
+      produce a plausible average speed for an urban trip.
+    metric: >
+      0 <= trip_distance_miles /
+      (trip_duration_minutes / 60) <= 45 mph
+    threshold: ">= 98% of rows within range, per source"
+    rationale: >
+      This check evaluates the relationship between two harmonized
+      fields rather than checking only whether individual fields are
+      present and numeric. It is intended to expose the controlled
+      Yellow Taxi trip-distance unit drift used in this experiment.
+    evaluation: >
+      Results are evaluated separately for HVFHV and Yellow Taxi so
+      that a problem introduced into one source can be distinguished
+      from the other source.

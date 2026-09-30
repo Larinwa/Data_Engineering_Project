@@ -1,0 +1,121 @@
+contract:
+  name: yellow_taxi_trip_events_contract
+  version: "1.0"
+  producer: "NYC Taxi & Limousine Commission"
+  consumer: "This project"
+  description: >
+    Consumer-defined data contract for the January 2024 NYC Yellow Taxi
+    trip records. The contract specifies expected schema, data-quality
+    requirements, and service-level objectives for independent validation
+    of the public data source.
+
+schema:
+  fields:
+    - name: VendorID
+      type: integer
+      description: TPEP provider code for the meter system used
+
+    - name: tpep_pickup_datetime
+      type: datetime
+      description: Meter-engaged timestamp
+
+    - name: tpep_dropoff_datetime
+      type: datetime
+      description: Meter-disengaged timestamp
+
+    - name: passenger_count
+      type: integer
+      description: Driver-entered passenger count
+
+    - name: trip_distance
+      type: float
+      description: Trip distance in miles
+
+    - name: RatecodeID
+      type: integer
+      description: Final rate code in effect at the end of the trip
+
+    - name: PULocationID
+      type: integer
+      description: TLC taxi zone where the meter was engaged
+
+    - name: DOLocationID
+      type: integer
+      description: TLC taxi zone where the meter was disengaged
+
+    - name: payment_type
+      type: integer
+      description: Payment method code
+
+    - name: fare_amount
+      type: float
+      description: Time-and-distance fare calculated by the meter
+
+    - name: extra
+      type: float
+      description: Miscellaneous extras and surcharges
+
+    - name: mta_tax
+      type: float
+      description: MTA tax
+
+    - name: tip_amount
+      type: float
+      description: Credit card tip amount
+
+    - name: tolls_amount
+      type: float
+      description: Total tolls paid on the trip
+
+    - name: improvement_surcharge
+      type: float
+      description: Improvement surcharge
+
+    - name: total_amount
+      type: float
+      description: Total amount charged to the passenger
+
+    - name: congestion_surcharge
+      type: float
+      description: Congestion surcharge
+
+slos:
+  - name: completeness_pickup
+    description: Proportion of records with a known pickup zone
+    metric: "PULocationID in known TLC zone lookup"
+    threshold: ">= 99%"
+    baseline_observed: "99.44% (2486/2500, January 2024 sample)"
+
+  - name: completeness_dropoff
+    description: Proportion of records with a known dropoff zone
+    metric: "DOLocationID in known TLC zone lookup"
+    threshold: ">= 99%"
+    baseline_observed: "98.88% (2472/2500, January 2024 sample)"
+
+  - name: fare_validity
+    description: Proportion of records with a non-negative fare amount
+    metric: "fare_amount >= 0"
+    threshold: ">= 97%"
+    baseline_observed: "98.48% (2462/2500, January 2024 sample)"
+
+  - name: trip_duration_validity
+    description: >
+      Proportion of records where dropoff strictly follows pickup
+      and total duration is plausible between 0 and 300 minutes
+    metric: "0 < (tpep_dropoff_datetime - tpep_pickup_datetime) < 300 min"
+    threshold: ">= 99%"
+    baseline_observed: "99.96% (2499/2500, January 2024 sample)"
+
+  - name: responsiveness
+    status: NOT APPLICABLE
+    note: >
+      Yellow Taxi records do not contain a dispatch/request stage
+      equivalent to the HVFHV request-to-pickup process.
+
+ownership:
+  producer_obligations: "None - public data, no formal agreement"
+  consumer_obligations: >
+    Define and validate the stated expectations independently.
+  accountability: >
+    The consumer is responsible for detecting and responding to
+    contract violations.

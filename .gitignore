@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environment
+.venv/
+
+# Large raw source data
+fhvhv_tripdata_2024-01.parquet
+
+# Generated local database
+ridehail_real.db
+
+# Environment/secrets
+.env
+
+# OS files
+Thumbs.db
+.DS_Store
