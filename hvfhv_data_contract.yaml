@@ -1,17 +1,19 @@
+
 fundamentals:
   name: hvfhv_trip_events
   domain: ride-hailing / high-volume for-hire vehicle trips
   description: >
-    Individual trip records for high-volume for-hire vehicle services
-    operating in New York City and published by the NYC Taxi &
-    Limousine Commission.
-  version: 1.0.0
+    Consumer-defined contract for January 2024 NYC High-Volume For-Hire
+    Vehicle trip records. The contract evaluates source conformance and
+    data quality for trip-duration analysis and prediction.
+  version: 1.1.0
   status: active
   source_dataset: fhvhv_tripdata_2024-01.parquet
-  sample_size: 2517
+  sample_size: 20000
   sample_method: >
-    Sample drawn from the January 2024 source data across all 31 days
-    using a fixed random seed for reproducibility.
+    Reproducible reservoir sample stratified by pickup day across all
+    31 days of January 2024, using random seed 42. Source values are
+    retained without quality-based filtering before validation.
 
 stakeholders:
   producer:
@@ -21,124 +23,202 @@ stakeholders:
       licensed high-volume for-hire vehicle bases.
 
   consumer:
-    name: Decision-Support / Demand Analysis
+    name: Decision-Support / Trip-Duration Analysis
     description: >
-      Uses trip data to analyse demand patterns by zone and time.
+      Uses trip records for trip-duration prediction and related
+      analysis of trip timing, distance, and location.
 
   contract_owner:
     name: Data Analyst
     description: >
-      Responsible for maintaining the consumer-defined contract.
+      Maintains consumer requirements, source mappings, validation
+      rules, and documented exceptions.
 
 schema:
   fields:
     - name: hvfhs_license_num
       type: string
-      description: Identifies the HVFHV company that operated the trip
-      required: true
-
-    - name: dispatching_base_num
-      type: string
-      description: License number of the base that dispatched the trip
+      description: HVFHV license identifier
       required: true
 
     - name: request_datetime
       type: timestamp
-      description: Time the rider requested the trip
+      description: Recorded time the rider requested the trip
       required: true
 
     - name: on_scene_datetime
       type: timestamp
-      description: Time the driver arrived at the pickup location
+      description: Recorded driver arrival time at pickup location
       required: false
+      notes: >
+        Missing values must not automatically be classified as defects;
+        interpret according to the source definition and applicable trip type.
 
     - name: pickup_datetime
       type: timestamp
-      description: Time the trip began
+      description: Recorded trip pickup time
       required: true
 
     - name: dropoff_datetime
       type: timestamp
-      description: Time the trip ended
+      description: Recorded trip drop-off time
       required: true
 
     - name: PULocationID
       type: integer
-      description: Pickup zone identifier
+      description: Pickup location identifier
       required: true
 
     - name: DOLocationID
       type: integer
-      description: Dropoff zone identifier
+      description: Drop-off location identifier
       required: true
 
     - name: trip_miles
       type: float
-      description: Trip distance in miles
+      description: Reported trip distance in miles
       required: true
 
     - name: trip_time
       type: integer
-      description: Trip duration in seconds
+      description: Reported trip duration in seconds
       required: true
 
     - name: base_passenger_fare
       type: float
-      description: Base passenger fare
+      description: Reported base passenger fare
       required: true
 
-    - name: driver_pay
-      type: float
-      description: Amount paid to the driver
-      required: true
+source_mappings:
+  canonical_concepts:
+    trip_duration:
+      source_field: trip_time
+      unit: seconds
+      validation_reference: >
+        Compare reported duration with the elapsed time between pickup
+        and drop-off timestamps.
+
+    trip_distance:
+      source_field: trip_miles
+      unit: miles
+
+    pickup_location:
+      source_field: PULocationID
+      mapping: TLC taxi-zone lookup
+
+    dropoff_location:
+      source_field: DOLocationID
+      mapping: TLC taxi-zone lookup
 
 service_level_objectives:
   - name: completeness_dropoff_zone
     description: >
-      Dropoff location should correspond to a known NYC zone rather
-      than the sentinel codes 264 or 265.
-    metric: percentage of trips where DOLocationID is not in [264, 265]
+      Proportion of records whose drop-off location identifier is
+      recognised by the applicable TLC location lookup.
+    metric: >
+      Records with a recognised DOLocationID divided by all sampled records.
     threshold: ">= 95%"
-    real_baseline_observed: "96.38%"
+    exception_handling: >
+      Handle documented special location codes explicitly. Do not classify
+      a code as invalid solely because it is excluded from a subset of zones.
 
   - name: completeness_pickup_zone
     description: >
-      Pickup location should correspond to a known NYC zone rather
-      than the sentinel codes 264 or 265.
-    metric: percentage of trips where PULocationID is not in [264, 265]
+      Proportion of records whose pickup location identifier is
+      recognised by the applicable TLC location lookup.
+    metric: >
+      Records with a recognised PULocationID divided by all sampled records.
     threshold: ">= 99%"
-    real_baseline_observed: "100.00%"
-
-  - name: responsiveness
-    description: >
-      Measures the proportion of trips picked up within 10 minutes
-      of the recorded request time.
-    metric: percentage of valid trips where pickup_datetime - request_datetime <= 10 minutes
-    threshold: ">= 95%"
-    real_baseline_observed: "95.95%"
+    exception_handling: >
+      Handle documented special location codes explicitly. Do not classify
+      a code as invalid solely because it is excluded from a subset of zones.
 
   - name: request_pickup_ordering
     description: >
-      Pickup should not occur before the recorded request time.
-    metric: percentage of trips where pickup_datetime >= request_datetime
+      Pickup must not precede the recorded request time when both
+      timestamps are available and interpretable.
+    metric: >
+      Records with valid request and pickup timestamps and pickup at or
+      after request, divided by all sampled records.
     threshold: ">= 99%"
-    real_baseline_observed: "99.05%"
+    handling: >
+      Missing or unparsable required timestamps do not pass this check.
+      Report missing timestamps separately from ordering violations.
+
+  - name: responsiveness
+    description: >
+      Proportion of records with a valid request-to-pickup interval
+      no greater than 10 minutes.
+    metric: >
+      Records with valid timestamps and a wait from 0 through 10 minutes,
+      divided by all sampled records.
+    threshold: ">= 95%"
+    handling: >
+      Negative waits and missing or unparsable timestamps do not pass.
+      Report ordering violations and missing timestamps separately.
+
+  - name: trip_duration_consistency
+    description: >
+      Reported trip_time should agree with elapsed time between pickup
+      and drop-off timestamps within a documented tolerance.
+    metric: >
+      Proportion of records with valid timestamps and reported duration
+      consistent with elapsed duration.
+    threshold: ">= 99%"
+    tolerance_seconds: 60
+    notes: >
+      The 60-second tolerance is a provisional consumer-defined rule and
+      must be checked against source semantics before final reporting.
+
+  - name: trip_duration_ordering
+    description: >
+      Drop-off must occur after pickup for records treated as completed trips.
+    metric: >
+      Proportion of sampled records with dropoff_datetime later than
+      pickup_datetime.
+    threshold: ">= 99%"
+    handling: >
+      Missing or unparsable timestamps do not pass. Report the count of
+      non-positive elapsed durations separately.
+
+  - name: trip_distance_validity
+    description: >
+      Trip distance must be positive for records included in ordinary
+      trip-duration prediction.
+    metric: >
+      Proportion of sampled records with trip_miles greater than zero.
+    threshold: ">= 99%"
+    handling: >
+      Flag non-positive values for review. Do not assume every flagged
+      record is erroneous without examining its source context.
+
+  - name: fare_review
+    description: >
+      Base passenger fare should be available and interpretable for
+      fare-related use.
+    metric: >
+      Proportion of sampled records with a non-negative base passenger fare.
+    threshold: ">= 99%"
+    handling: >
+      Negative fares are review flags pending source-semantic confirmation.
+      They should not automatically be removed from the trip-duration study.
 
   - name: data_availability
     description: >
-      Monthly trip records should be publicly released within the
-      expected publication window.
-    metric: time between the end of the trip month and public file release
+      Monthly source data should be released within the expected
+      publication window.
+    metric: >
+      Time between the end of the trip month and public file release.
     threshold: "published within approximately 2 months of month end"
     testable_live: false
 
 change_management:
   breaking_change_definition: >
-    Any rename, removal, or type change to a required field; any change
-    to the interpretation or use of PULocationID or DOLocationID sentinel
-    codes; or a change to the stated monthly publication cadence.
+    Renaming or removing a required field, changing its meaning or unit,
+    changing location-code interpretation, or changing the source's
+    publication process in a way that affects consumer expectations.
 
 notification_expectation: >
-  Changes are expected to be communicated through the publisher's
-  public documentation or notices because there is no negotiated
-  producer-consumer agreement.
+  The consumer monitors publicly available source documentation and
+  records any changes that affect the contract. No formal producer-consumer
+  agreement is assumed.

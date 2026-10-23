@@ -1,36 +1,176 @@
+
 contract:
   name: harmonization_contract
-  version: "1.0"
+  version: "1.2"
   description: >
-    Consumer-defined contract for the harmonization of HVFHV and
-    Yellow Taxi trip records into a shared canonical schema.
-    The contract evaluates whether the harmonization preserves
-    records and produces semantically plausible relationships
-    between the canonical fields.
+    Consumer-defined contract for mapping independently produced
+    trip datasets into a shared canonical schema. The contract
+    evaluates record preservation, canonical-field completeness,
+    semantic compatibility, unit consistency, and cross-field
+    plausibility.
+
+canonical_schema:
+  required_fields:
+    - source
+    - pickup_location_id
+    - dropoff_location_id
+    - pickup_datetime
+    - dropoff_datetime
+    - trip_duration_minutes
+    - trip_distance_miles
+
+  nullable_fields:
+    - request_to_pickup_minutes
+    - base_passenger_fare
+    - yellow_taxi_selected_fare_components
+
+  field_definitions:
+    source:
+      meaning: Identifier of the originating dataset
+      allowed_values:
+        - hvfhv
+        - yellow_taxi
+
+    pickup_location_id:
+      meaning: Pickup TLC taxi-zone identifier
+
+    dropoff_location_id:
+      meaning: Drop-off TLC taxi-zone identifier
+
+    pickup_datetime:
+      meaning: Pickup timestamp
+
+    dropoff_datetime:
+      meaning: Drop-off timestamp
+
+    trip_duration_minutes:
+      meaning: Elapsed time between pickup and drop-off
+      unit: minutes
+      derivation: Drop-off timestamp minus pickup timestamp
+
+    trip_distance_miles:
+      meaning: Trip distance
+      unit: miles
+
+    request_to_pickup_minutes:
+      meaning: Elapsed time between request and pickup
+      unit: minutes
+      availability:
+        hvfhv: Derived from request_datetime and pickup_datetime
+        yellow_taxi: Not available; expected to be null
+
+    base_passenger_fare:
+      meaning: HVFHV base passenger fare
+      availability:
+        hvfhv: Mapped from base_passenger_fare
+        yellow_taxi: Not available; expected to be null
+
+    yellow_taxi_selected_fare_components:
+      meaning: Sum of six selected Yellow Taxi fare components
+      availability:
+        hvfhv: Not available; expected to be null
+        yellow_taxi: Derived from the six components specified in the binding
 
 checks:
   - name: mapping_completeness
     type: structural
     description: >
-      Every source record should appear in the harmonized output.
-    metric: "harmonized rows / source rows, evaluated separately by source"
+      Every source record must be represented in the harmonized output,
+      with source identity retained.
+    metric: >
+      Harmonized row count divided by source row count,
+      evaluated separately for each source.
     threshold: "== 100%"
+    additional_requirement: >
+      Validate source-specific row counts and source identity.
+      Row counts alone do not prove record-level preservation.
+
+  - name: canonical_schema_completeness
+    type: structural
+    description: >
+      All required canonical fields must exist and be populated
+      where the source provides the required information.
+    required_fields:
+      - source
+      - pickup_location_id
+      - dropoff_location_id
+      - pickup_datetime
+      - dropoff_datetime
+      - trip_duration_minutes
+      - trip_distance_miles
+    metric: >
+      Proportion of records with non-null values in each required field,
+      reported separately by source.
+    threshold: "Report observed completeness for every required field"
+    nullable_field_policy: >
+      Null values in request_to_pickup_minutes and the source-specific
+      fare fields are expected where those fields are not available
+      from the originating source.
+
+  - name: semantic_compatibility
+    type: semantic
+    description: >
+      Canonical fields must retain their intended meaning across sources.
+    requirements:
+      - >
+        Trip duration represents elapsed pickup-to-drop-off time
+        in minutes for both sources.
+      - >
+        Trip distance represents miles for both sources.
+      - >
+        Location identifiers retain their TLC taxi-zone meaning.
+      - >
+        Fare measures remain source-specific and are not treated
+        as equivalent solely because they concern fares.
+      - >
+        Source-specific fields must be null where the binding specifies
+        that the source does not provide the measure.
+    threshold: "All defined mapping and semantic requirements satisfied"
+
+  - name: unit_consistency
+    type: semantic
+    description: >
+      Canonical measurement fields must use the units specified
+      in their definitions and bindings.
+    requirements:
+      trip_distance_miles: miles
+      trip_duration_minutes: minutes
+      request_to_pickup_minutes: minutes
+    threshold: "All defined unit requirements satisfied"
+    rationale: >
+      A numeric value can be structurally valid but expressed in the
+      wrong unit. Unit consistency is required for valid cross-source
+      comparisons and predictive modelling.
 
   - name: speed_plausibility
     type: semantic
     description: >
-      The relationship between trip distance and trip duration should
-      produce a plausible average speed for an urban trip.
+      Trip distance and duration must produce a plausible average
+      speed under the operational criterion defined for this study.
     metric: >
       0 <= trip_distance_miles /
       (trip_duration_minutes / 60) <= 45 mph
-    threshold: ">= 98% of rows within range, per source"
+    speed_limit_mph: 45
+    minimum_plausible_pct: 98
+    threshold: ">= 98% of all source rows, evaluated separately by source"
+    invalid_row_policy: >
+      Missing or non-finite distance or duration, non-positive duration,
+      negative distance, and speeds outside the defined range count
+      as not plausible. All source rows remain in the denominator.
     rationale: >
-      This check evaluates the relationship between two harmonized
-      fields rather than checking only whether individual fields are
-      present and numeric. It is intended to expose the controlled
-      Yellow Taxi trip-distance unit drift used in this experiment.
+      This check evaluates the relationship between canonical distance
+      and duration fields. It is intended to detect semantic anomalies,
+      including the controlled Yellow Taxi distance-unit drift experiment.
     evaluation: >
-      Results are evaluated separately for HVFHV and Yellow Taxi so
-      that a problem introduced into one source can be distinguished
-      from the other source.
+      Report results separately for HVFHV and Yellow Taxi.
+
+ownership:
+  producer_obligations: >
+    No formal producer-consumer agreement is assumed for the public data.
+  consumer_obligations: >
+    Define canonical meanings, document source bindings, validate
+    transformations, and investigate contract violations.
+  enforcement_policy: >
+    Source-level contract results remain unchanged. Any downstream
+    eligibility or filtering policy must be documented separately.
+    Filtering does not retroactively make a source contract pass.

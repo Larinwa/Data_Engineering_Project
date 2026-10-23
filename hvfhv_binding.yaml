@@ -1,0 +1,67 @@
+
+binding:
+  name: hvfhv_to_canonical
+  version: "1.0"
+  source: hvfhv_trip_events
+  target: harmonized_trip_events
+
+mappings:
+  - source_field: PULocationID
+    canonical_field: pickup_location_id
+    meaning: Pickup TLC taxi-zone identifier
+    transformation: Direct mapping
+
+  - source_field: DOLocationID
+    canonical_field: dropoff_location_id
+    meaning: Drop-off TLC taxi-zone identifier
+    transformation: Direct mapping
+
+  - source_field: pickup_datetime
+    canonical_field: pickup_datetime
+    meaning: Pickup timestamp
+    transformation: Parse as datetime
+
+  - source_field: dropoff_datetime
+    canonical_field: dropoff_datetime
+    meaning: Drop-off timestamp
+    transformation: Parse as datetime
+
+  - source_fields:
+      - pickup_datetime
+      - dropoff_datetime
+    canonical_field: trip_duration_minutes
+    meaning: Elapsed trip duration
+    unit: minutes
+    transformation: >
+      Calculate dropoff_datetime minus pickup_datetime
+      and convert the elapsed time to minutes.
+
+  - source_field: trip_miles
+    canonical_field: trip_distance_miles
+    meaning: Trip distance
+    unit: miles
+    transformation: Direct mapping; no unit conversion
+
+  - source_field: base_passenger_fare
+    canonical_field: total_fare
+    meaning: HVFHV base passenger fare
+    transformation: Direct mapping
+    semantic_note: >
+      Represents base_passenger_fare from the HVFHV source.
+      It is not assumed to be equivalent to the Yellow Taxi
+      fare measure derived from selected fare components.
+
+  - source_fields:
+      - request_datetime
+      - pickup_datetime
+    canonical_field: request_to_pickup_minutes
+    meaning: Elapsed time from request to pickup
+    unit: minutes
+    transformation: >
+      Calculate pickup_datetime minus request_datetime
+      and convert the elapsed time to minutes.
+
+  - source_field: null
+    canonical_field: source
+    meaning: Source dataset identifier
+    transformation: Constant value "hvfhv"

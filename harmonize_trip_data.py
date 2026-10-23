@@ -1,55 +1,46 @@
+
 """
-The purpose of this script is to harmonize two trip-data sources into a shared canonical schema.
+Harmonize HVFHV and Yellow Taxi trip records into a shared canonical schema.
 """
 
 import sqlite3
-import sys
 
 import pandas as pd
 
 
 DB_PATH = "ridehail_real.db"
-
-
-if len(sys.argv) != 4:
-    print(
-        "Usage: python harmonize_trip_data.py "
-        "<hvfhv_table> <yellow_table> <output_table>"
-    )
-    sys.exit(1)
-
-
-HVFHV_TABLE = sys.argv[1]
-YELLOW_TABLE = sys.argv[2]
-OUTPUT_TABLE = sys.argv[3]
-
+HVFHV_TABLE = "hvfhv_trip_events"
+YELLOW_TABLE = "yellow_trip_events"
+OUTPUT_TABLE = "harmonized_trip_events"
 
 with sqlite3.connect(DB_PATH) as connection:
     hvfhv = pd.read_sql(
         f"SELECT * FROM {HVFHV_TABLE}",
-        connection
+        connection,
     )
 
     yellow = pd.read_sql(
         f"SELECT * FROM {YELLOW_TABLE}",
-        connection
+        connection,
     )
 
 
+# Parse source timestamps before deriving canonical temporal fields.
 for column in [
     "request_datetime",
     "pickup_datetime",
     "dropoff_datetime",
 ]:
-    hvfhv[column] = pd.to_datetime(hvfhv[column])
+    hvfhv[column] = pd.to_datetime(hvfhv[column], errors="coerce")
 
 for column in [
     "tpep_pickup_datetime",
     "tpep_dropoff_datetime",
 ]:
-    yellow[column] = pd.to_datetime(yellow[column])
+    yellow[column] = pd.to_datetime(yellow[column], errors="coerce")
 
 
+# Map HVFHV fields to the canonical schema.
 hvfhv_canonical = pd.DataFrame({
     "source": "hvfhv",
     "pickup_location_id": hvfhv["PULocationID"],
@@ -63,7 +54,8 @@ hvfhv_canonical = pd.DataFrame({
         ).dt.total_seconds() / 60
     ),
     "trip_distance_miles": hvfhv["trip_miles"],
-    "total_fare": hvfhv["base_passenger_fare"],
+    "base_passenger_fare": hvfhv["base_passenger_fare"],
+    "yellow_taxi_selected_fare_components": pd.NA,
     "request_to_pickup_minutes": (
         (
             hvfhv["pickup_datetime"]
@@ -73,6 +65,7 @@ hvfhv_canonical = pd.DataFrame({
 })
 
 
+# Define the fare components currently used for Yellow Taxi.
 yellow_fare_components = [
     "fare_amount",
     "extra",
@@ -83,6 +76,7 @@ yellow_fare_components = [
 ]
 
 
+# Map Yellow Taxi fields to the same canonical structure.
 yellow_canonical = pd.DataFrame({
     "source": "yellow_taxi",
     "pickup_location_id": yellow["PULocationID"],
@@ -96,23 +90,26 @@ yellow_canonical = pd.DataFrame({
         ).dt.total_seconds() / 60
     ),
     "trip_distance_miles": yellow["trip_distance"],
-    "total_fare": yellow[yellow_fare_components].sum(axis=1),
+    "base_passenger_fare": pd.NA,
+    "yellow_taxi_selected_fare_components": (
+        yellow[yellow_fare_components].sum(axis=1, min_count=1)
+    ),
     "request_to_pickup_minutes": pd.NA,
 })
 
 
+# Combine records using the shared canonical field structure.
 harmonized = pd.concat(
     [hvfhv_canonical, yellow_canonical],
-    ignore_index=True
+    ignore_index=True,
 )
-
 
 with sqlite3.connect(DB_PATH) as connection:
     harmonized.to_sql(
         OUTPUT_TABLE,
         connection,
         if_exists="replace",
-        index=False
+        index=False,
     )
 
 
@@ -121,6 +118,4 @@ print(f"Yellow Taxi source: {YELLOW_TABLE}")
 print(f"HVFHV rows harmonized: {len(hvfhv_canonical):,}")
 print(f"Yellow Taxi rows harmonized: {len(yellow_canonical):,}")
 print(f"Total harmonized rows: {len(harmonized):,}")
-print(
-    f"Saved to {DB_PATH} as table '{OUTPUT_TABLE}'"
-)
+print(f"Saved to {DB_PATH} as table '{OUTPUT_TABLE}'")

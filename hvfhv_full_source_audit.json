@@ -1,0 +1,25 @@
+{
+  "total_rows": 19663930,
+  "rows_scanned": 19663930,
+  "nulls": {
+    "request_datetime": 0,
+    "on_scene_datetime": 5218737,
+    "pickup_datetime": 0,
+    "dropoff_datetime": 0,
+    "PULocationID": 0,
+    "DOLocationID": 0,
+    "trip_miles": 0,
+    "trip_time": 0,
+    "base_passenger_fare": 0
+  },
+  "pickup_before_request": 188251,
+  "pickup_before_on_scene": 5711,
+  "dropoff_not_after_pickup": 2,
+  "invalid_trip_miles_nonpositive": 3286,
+  "invalid_trip_time_nonpositive": 2,
+  "negative_base_passenger_fare": 191,
+  "request_pickup_over_10_minutes": 681939,
+  "request_pickup_negative": 188251,
+  "pickup_zone_264_or_265": 765,
+  "dropoff_zone_264_or_265": 741161
+}

@@ -1,13 +1,22 @@
+
 contract:
   name: yellow_taxi_trip_events_contract
-  version: "1.0"
-  producer: "NYC Taxi & Limousine Commission"
-  consumer: "This project"
+  version: "1.1"
+  producer: NYC Taxi & Limousine Commission
+  consumer: Decision-Support / Trip-Duration Analysis
   description: >
-    Consumer-defined data contract for the January 2024 NYC Yellow Taxi
-    trip records. The contract specifies expected schema, data-quality
-    requirements, and service-level objectives for independent validation
-    of the public data source.
+    Consumer-defined contract for January 2024 NYC Yellow Taxi trip
+    records. The contract evaluates source conformance and data quality
+    for trip-duration analysis and prediction.
+
+dataset:
+  source: >
+    https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet
+  sample_size: 20000
+  sample_method: >
+    Reproducible sample allocated across all 31 pickup days of January
+    2024, using random seed 42. Source values are retained without
+    quality-based filtering before validation.
 
 schema:
   fields:
@@ -79,43 +88,116 @@ schema:
       type: float
       description: Congestion surcharge
 
+source_mappings:
+  canonical_concepts:
+    trip_duration:
+      source_fields:
+        - tpep_pickup_datetime
+        - tpep_dropoff_datetime
+      derivation: >
+        Elapsed time in minutes, calculated as drop-off timestamp
+        minus pickup timestamp.
+
+    trip_distance:
+      source_field: trip_distance
+      unit: miles
+
+    pickup_location:
+      source_field: PULocationID
+      mapping: TLC taxi-zone lookup
+
+    dropoff_location:
+      source_field: DOLocationID
+      mapping: TLC taxi-zone lookup
+
+    fare:
+      source_fields:
+        - fare_amount
+        - total_amount
+      notes: >
+        These fields have different meanings. Negative fare values require
+        review in the context of payment type and source documentation.
+
 slos:
   - name: completeness_pickup
-    description: Proportion of records with a known pickup zone
-    metric: "PULocationID in known TLC zone lookup"
+    description: Proportion of records with a recognised pickup location
+    metric: >
+      Records with a recognised PULocationID divided by all sampled records.
     threshold: ">= 99%"
-    baseline_observed: "99.44% (2486/2500, January 2024 sample)"
+    handling: >
+      Use the official location lookup and handle documented special codes
+      explicitly rather than silently excluding them.
 
   - name: completeness_dropoff
-    description: Proportion of records with a known dropoff zone
-    metric: "DOLocationID in known TLC zone lookup"
+    description: Proportion of records with a recognised drop-off location
+    metric: >
+      Records with a recognised DOLocationID divided by all sampled records.
     threshold: ">= 99%"
-    baseline_observed: "98.88% (2472/2500, January 2024 sample)"
-
-  - name: fare_validity
-    description: Proportion of records with a non-negative fare amount
-    metric: "fare_amount >= 0"
-    threshold: ">= 97%"
-    baseline_observed: "98.48% (2462/2500, January 2024 sample)"
+    handling: >
+      Use the official location lookup and handle documented special codes
+      explicitly rather than silently excluding them.
 
   - name: trip_duration_validity
     description: >
-      Proportion of records where dropoff strictly follows pickup
-      and total duration is plausible between 0 and 300 minutes
-    metric: "0 < (tpep_dropoff_datetime - tpep_pickup_datetime) < 300 min"
+      Proportion of records with positive elapsed trip duration that is
+      below the provisional 300-minute consumer threshold.
+    metric: >
+      Records where 0 < elapsed duration < 300 minutes, divided by all
+      sampled records.
     threshold: ">= 99%"
-    baseline_observed: "99.96% (2499/2500, January 2024 sample)"
+    upper_bound_minutes: 300
+    handling: >
+      Missing or unparsable timestamps, non-positive durations, and
+      durations at or above the upper bound do not pass this check.
+      Flag long durations for review before treating them as errors.
+
+  - name: trip_distance_validity
+    description: >
+      Proportion of records with positive reported trip distance.
+    metric: >
+      Records with trip_distance greater than zero divided by all sampled records.
+    threshold: ">= 99%"
+    handling: >
+      Zero-distance records are flagged for review rather than automatically
+      treated as erroneous. Their suitability for ordinary trip-duration
+      prediction must be assessed.
+
+  - name: fare_validity
+    description: >
+      Proportion of records with a non-negative fare amount.
+    metric: >
+      Records with fare_amount greater than or equal to zero divided by all
+      sampled records.
+    threshold: ">= 97%"
+    handling: >
+      Negative fare values are flagged for review. Payment type and source
+      semantics must be considered before classifying them as defects or
+      excluding them from downstream analysis.
 
   - name: responsiveness
     status: NOT APPLICABLE
     note: >
-      Yellow Taxi records do not contain a dispatch/request stage
-      equivalent to the HVFHV request-to-pickup process.
+      The selected Yellow Taxi records do not provide a request-to-pickup
+      process equivalent to the HVFHV request and pickup timestamps.
 
 ownership:
-  producer_obligations: "None - public data, no formal agreement"
+  producer_obligations: >
+    No formal producer-consumer agreement is assumed for the public dataset.
   consumer_obligations: >
-    Define and validate the stated expectations independently.
+    Define the intended analytical use, validate source data, document
+    exceptions, and maintain the contract as requirements evolve.
   accountability: >
-    The consumer is responsible for detecting and responding to
-    contract violations.
+    The consumer is responsible for detecting contract violations and
+    documenting the response to failed or review-required records.
+
+historical_baselines:
+  note: >
+    The following results are from the original 2,500-record sample and
+    must not be treated as results for the revised 20,000-record sample.
+  original_sample_size: 2500
+  original_sample_period: January 2024
+  original_observations:
+    completeness_pickup: "99.44%"
+    completeness_dropoff: "98.88%"
+    fare_validity: "98.48%"
+    trip_duration_validity: "99.96%"

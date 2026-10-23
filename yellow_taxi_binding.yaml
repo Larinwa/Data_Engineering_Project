@@ -1,0 +1,75 @@
+
+binding:
+  name: yellow_taxi_to_canonical
+  version: "1.0"
+  source: yellow_trip_events
+  target: harmonized_trip_events
+
+mappings:
+  - source_field: PULocationID
+    canonical_field: pickup_location_id
+    meaning: Pickup TLC taxi-zone identifier
+    transformation: Direct mapping
+
+  - source_field: DOLocationID
+    canonical_field: dropoff_location_id
+    meaning: Drop-off TLC taxi-zone identifier
+    transformation: Direct mapping
+
+  - source_field: tpep_pickup_datetime
+    canonical_field: pickup_datetime
+    meaning: Meter-engaged timestamp
+    transformation: Parse as datetime
+
+  - source_field: tpep_dropoff_datetime
+    canonical_field: dropoff_datetime
+    meaning: Meter-disengaged timestamp
+    transformation: Parse as datetime
+
+  - source_fields:
+      - tpep_pickup_datetime
+      - tpep_dropoff_datetime
+    canonical_field: trip_duration_minutes
+    meaning: Elapsed trip duration
+    unit: minutes
+    transformation: >
+      Calculate tpep_dropoff_datetime minus tpep_pickup_datetime
+      and convert the elapsed time to minutes.
+
+  - source_field: trip_distance
+    canonical_field: trip_distance_miles
+    meaning: Trip distance
+    unit: miles
+    transformation: Direct mapping; no unit conversion
+
+  - source_fields:
+      - fare_amount
+      - extra
+      - mta_tax
+      - tolls_amount
+      - improvement_surcharge
+      - congestion_surcharge
+    canonical_field: total_fare
+    meaning: Sum of selected Yellow Taxi fare components
+    transformation: >
+      Calculate the row-wise sum of fare_amount, extra, mta_tax,
+      tolls_amount, improvement_surcharge, and congestion_surcharge.
+    excluded_fields:
+      - tip_amount
+      - total_amount
+    semantic_note: >
+      This is a derived sum of selected fare components. It is not
+      equivalent by definition to HVFHV base_passenger_fare.
+      The canonical field name does not imply semantic equivalence
+      between the two source-specific fare measures.
+
+  - source_field: null
+    canonical_field: request_to_pickup_minutes
+    meaning: Request-to-pickup duration
+    transformation: Set to null because the required request timestamp
+      is not mapped from this source.
+
+  - source_field: null
+    canonical_field: source
+    meaning: Source dataset identifier
+    transformation: Constant value "yellow_taxi"

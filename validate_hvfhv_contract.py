@@ -1,180 +1,218 @@
-"""
-The purpose of this script is to validate an HVFHV trip table against the consumer-defined contract.
-"""
 
+"""Validate the HVFHV sample against its consumer-defined YAML contract."""
+
+import re
 import sqlite3
-import sys
 
 import pandas as pd
 import yaml
 
-
 DB_PATH = "ridehail_real.db"
 CONTRACT_PATH = "hvfhv_data_contract.yaml"
+TABLE_NAME = "hvfhv_trip_events"
 
 
-if len(sys.argv) != 2:
-    print(
-        "Usage: python validate_hvfhv_contract.py "
-        "<table_name>"
+def threshold_value(text):
+    """Convert a threshold such as '>= 95%' into 0.95."""
+    match = re.fullmatch(
+        r"\s*>=\s*(\d+(?:\.\d+)?)\s*%\s*",
+        str(text),
     )
-    sys.exit(1)
+    if not match:
+        raise ValueError(f"Unsupported threshold format: {text!r}")
+    return float(match.group(1)) / 100
 
 
-TABLE_NAME = sys.argv[1]
+def main():
+    with open(CONTRACT_PATH, encoding="utf-8") as file:
+        contract = yaml.safe_load(file)
 
-
-with open(CONTRACT_PATH, "r", encoding="utf-8") as file:
-    contract = yaml.safe_load(file)
-
-
-with sqlite3.connect(DB_PATH) as connection:
-    df = pd.read_sql(
-        f"SELECT * FROM {TABLE_NAME}",
-        connection
-    )
-
-    zones = pd.read_sql(
-        "SELECT * FROM zones",
-        connection
-    )
-
-
-known_zone_ids = set(zones["LocationID"]) - {264, 265}
-
-
-print("=" * 60)
-print("HVFHV CONTRACT VALIDATION")
-print("=" * 60)
-print(f"Contract: {contract['fundamentals']['name']}")
-print(f"Database: {DB_PATH}")
-print(f"Table: {TABLE_NAME}")
-print(f"Rows checked: {len(df):,}")
-print()
-
-
-expected_fields = {
-    field["name"]
-    for field in contract["schema"]["fields"]
-}
-
-actual_fields = set(df.columns)
-
-missing_fields = expected_fields - actual_fields
-
-schema_passed = not missing_fields
-
-
-df["request_datetime"] = pd.to_datetime(
-    df["request_datetime"],
-    errors="coerce"
-)
-
-df["pickup_datetime"] = pd.to_datetime(
-    df["pickup_datetime"],
-    errors="coerce"
-)
-
-
-valid_timestamps = df.dropna(
-    subset=["request_datetime", "pickup_datetime"]
-).copy()
-
-
-valid_timestamps["wait_minutes"] = (
-    (
-        valid_timestamps["pickup_datetime"]
-        - valid_timestamps["request_datetime"]
-    )
-    .dt.total_seconds()
-    / 60
-)
-
-
-non_negative_waits = valid_timestamps[
-    valid_timestamps["wait_minutes"] >= 0
-]
-
-
-observed = {
-    "completeness_dropoff_zone": (
-        df["DOLocationID"].isin(known_zone_ids)
-    ).mean(),
-
-    "completeness_pickup_zone": (
-        df["PULocationID"].isin(known_zone_ids)
-    ).mean(),
-
-    "responsiveness": (
-        non_negative_waits["wait_minutes"] <= 10
-    ).mean()
-    if len(non_negative_waits) > 0
-    else 0.0,
-
-    "request_pickup_ordering": (
-        valid_timestamps["wait_minutes"] >= 0
-    ).mean()
-    if len(valid_timestamps) > 0
-    else 0.0,
-}
-
-
-all_passed = schema_passed
-
-
-print("VALIDATION RESULTS")
-print("-" * 60)
-
-
-if schema_passed:
-    print("[PASS] Schema conformance")
-else:
-    print(
-        "[FAIL] Schema conformance: "
-        f"Missing required fields: {missing_fields}"
-    )
-
-
-for slo in contract["service_level_objectives"]:
-    name = slo["name"]
-
-    if slo.get("testable_live") is False:
-        print(f"[NOT TESTABLE] {name}")
-        continue
-
-    threshold = (
-        float(
-            slo["threshold"]
-            .replace(">=", "")
-            .replace("%", "")
-            .strip()
+    with sqlite3.connect(DB_PATH) as conn:
+        df = pd.read_sql_query(
+            f'SELECT * FROM "{TABLE_NAME}"', conn
         )
-        / 100
+        zones = pd.read_sql_query(
+            "SELECT LocationID FROM zones", conn
+        )
+
+    if df.empty:
+        raise ValueError(
+            f"The table '{TABLE_NAME}' contains no records."
+        )
+
+    print("=" * 68)
+    print("HVFHV CONTRACT VALIDATION")
+    print("=" * 68)
+    print(f"Contract: {contract['fundamentals']['name']}")
+    print(f"Version: {contract['fundamentals']['version']}")
+    print(f"Database: {DB_PATH}")
+    print(f"Table: {TABLE_NAME}")
+    print(f"Rows checked: {len(df):,}\n")
+
+    # Check schema field presence.
+    fields = contract["schema"]["fields"]
+    missing_fields = [
+        field["name"]
+        for field in fields
+        if field["name"] not in df.columns
+    ]
+
+    schema_passed = not missing_fields
+
+    print("SCHEMA CHECKS")
+    print("-" * 68)
+
+    if missing_fields:
+        print(f"[FAIL] Missing fields: {missing_fields}")
+    else:
+        print("[PASS] All contract fields are present.")
+
+    # Check required fields for null values.
+    for field in fields:
+        name = field["name"]
+
+        if name in df.columns and field.get("required", False):
+            null_count = int(df[name].isna().sum())
+            passed = null_count == 0
+
+            print(
+                f"[{'PASS' if passed else 'FAIL'}] "
+                f"Required field {name}: {null_count:,} nulls"
+            )
+
+            if not passed:
+                schema_passed = False
+
+    # Parse timestamps without silently discarding invalid records.
+    for name in [
+        "request_datetime",
+        "pickup_datetime",
+        "dropoff_datetime",
+    ]:
+        df[name] = pd.to_datetime(df[name], errors="coerce")
+
+    wait_minutes = (
+        df["pickup_datetime"] - df["request_datetime"]
+    ).dt.total_seconds() / 60
+
+    elapsed_minutes = (
+        df["dropoff_datetime"] - df["pickup_datetime"]
+    ).dt.total_seconds() / 60
+
+    # Compare location IDs with the supplied zone lookup.
+    zones["LocationID"] = pd.to_numeric(
+        zones["LocationID"], errors="coerce"
     )
+    zone_ids = set(zones["LocationID"].dropna().astype(int))
+    ordinary_zone_ids = zone_ids - {264, 265}
 
-    observed_value = observed[name]
-    passed = observed_value >= threshold
+    pu = pd.to_numeric(df["PULocationID"], errors="coerce")
+    do = pd.to_numeric(df["DOLocationID"], errors="coerce")
+    distance = pd.to_numeric(df["trip_miles"], errors="coerce")
+    fare = pd.to_numeric(df["base_passenger_fare"], errors="coerce")
 
-    if not passed:
-        all_passed = False
+    observed = {
+        "completeness_dropoff_zone": do.isin(ordinary_zone_ids).mean(),
+        "completeness_pickup_zone": pu.isin(ordinary_zone_ids).mean(),
+        "request_pickup_ordering": (
+            wait_minutes.notna() & (wait_minutes >= 0)
+        ).mean(),
+        "responsiveness": (
+            wait_minutes.notna()
+            & (wait_minutes >= 0)
+            & (wait_minutes <= 10)
+        ).mean(),
+        "trip_duration_ordering": (
+            elapsed_minutes.notna() & (elapsed_minutes > 0)
+        ).mean(),
+        "trip_distance_validity": (
+            distance.notna() & (distance > 0)
+        ).mean(),
+        "fare_review": (
+            fare.notna() & (fare >= 0)
+        ).mean(),
+    }
 
-    status = "PASS" if passed else "FAIL"
+    print("\nDATA-QUALITY RESULTS")
+    print("-" * 68)
 
-    print(f"[{status}] {name}")
+    all_passed = schema_passed
+
+    for slo in contract["service_level_objectives"]:
+        name = slo["name"]
+
+        if slo.get("testable_live") is False:
+            print(f"[NOT TESTABLE] {name}")
+            continue
+
+        # Diagnostic only: the 60-second tolerance is provisional.
+        if name == "trip_duration_consistency":
+            reported = pd.to_numeric(
+                df["trip_time"], errors="coerce"
+            )
+            calculated = elapsed_minutes * 60
+            comparable = reported.notna() & calculated.notna()
+            within_60s = (
+                (reported - calculated).abs() <= 60
+            ) & comparable
+
+            print(
+                f"[REVIEW] {name}: "
+                f"{int(within_60s.sum()):,}/"
+                f"{int(comparable.sum()):,} comparable records "
+                "within 60 seconds; diagnostic only."
+            )
+            continue
+
+        if name not in observed:
+            print(f"[REVIEW] No implemented metric for {name}")
+            continue
+
+        value = float(observed[name])
+        threshold = threshold_value(slo["threshold"])
+        passed = value >= threshold
+
+        if not passed:
+            all_passed = False
+
+        print(
+            f"[{'PASS' if passed else 'FAIL'}] {name}: "
+            f"{value:.2%} "
+            f"(required >= {threshold:.0%}; n={len(df):,})"
+        )
+
+    # Report diagnostic counts separately from contract decisions.
+    print("\nREVIEW COUNTS")
+    print("-" * 68)
+    print(f"Pickup IDs 264/265: {int(pu.isin([264, 265]).sum()):,}")
+    print(f"Drop-off IDs 264/265: {int(do.isin([264, 265]).sum()):,}")
     print(
-        f"       Observed: {observed_value:.2%} "
-        f"(threshold: >= {threshold:.0%})"
+        "Negative request-to-pickup intervals: "
+        f"{int((wait_minutes < 0).sum()):,}"
     )
+    print(
+        "Missing/unparseable request or pickup timestamps: "
+        f"{int(wait_minutes.isna().sum()):,}"
+    )
+    print(
+        f"Non-positive elapsed trip durations: "
+        f"{int((elapsed_minutes <= 0).sum()):,}"
+    )
+    print(
+        f"Non-positive trip distances: "
+        f"{int((distance <= 0).sum()):,}"
+    )
+    print(f"Negative base fares: {int((fare < 0).sum()):,}")
+
+    print("\n" + "=" * 68)
+    print(
+        "OVERALL RESULT: CONTRACT SATISFIED"
+        if all_passed
+        else "OVERALL RESULT: CONTRACT VIOLATED"
+    )
+    print("REVIEW diagnostics are not counted as pass/fail.")
+    print("=" * 68)
 
 
-print()
-print("=" * 60)
-
-
-if all_passed:
-    print("OVERALL RESULT: CONTRACT SATISFIED")
-else:
-    print("OVERALL RESULT: CONTRACT VIOLATED")
-
-
-print("=" * 60)
+if __name__ == "__main__":
+    main()
